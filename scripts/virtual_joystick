@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+import sys
+
+from rover_arm_sim.virtual_joystick import main
+
+sys.exit(main())

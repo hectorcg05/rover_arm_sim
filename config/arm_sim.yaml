@@ -1,0 +1,471 @@
+# =====================================================================================================
+# rover_arm_sim: ÚNICO archivo de parámetros físicos y de comportamiento de la simulación del brazo
+# =====================================================================================================
+# Cómo leer los comentarios (rutas relativas a ~/ros2_ws/src/):
+#   archivo:línea   → valor copiado del código real del rover (VERIFICADO). La prueba
+#                     test/test_sources.py compara cada copia contra el archivo original.
+#   # PENDIENTE P1 / P3 / P4 → se mide en el brazo real (docs/contexto/GUIA_PENDIENTES.md).
+#   # DEFAULT       → valor por defecto que no se va a medir (supuesto documentado en
+#                     docs/sim_implementation/documentacion_sim.md).
+#   "reporte §X"    → docs/sim_implementation/REPORTE_SIMULACION_BRAZO.md
+# Para cambiar el comportamiento basta con editar este archivo y relanzar: no hay números físicos
+# en el código.
+# =====================================================================================================
+
+# -----------------------------------------------------------------------------------------------------
+# Arranque
+# -----------------------------------------------------------------------------------------------------
+startup:
+  # Postura física del brazo al arrancar Gazebo (convención de arm_manager, grados).
+  # P2 resuelto: GUIA_PENDIENTES.md:63-73 y docs/contexto/brazo_init.jpeg
+  pose_deg:
+    joint1: 0.0
+    joint2: 170.0
+    joint3: -146.0
+    joint4: 0.0
+    joint5: 0.0
+  gripper_opening_m: 0.17          # DEFAULT (arranca abierto del todo)
+  feedback_wait_timeout_s: 120.0   # DEFAULT tiempo máximo que el launch espera el primer feedback
+
+# -----------------------------------------------------------------------------------------------------
+# Emulador de drivers (nodo puente con Gazebo)
+# -----------------------------------------------------------------------------------------------------
+emulator:
+  rate_hz: 100.0                   # DEFAULT (reporte §6.7, "Frecuencia de salida del emulador")
+  status_rate_hz: 5.0              # DEFAULT
+  status_topic: /rover_arm_sim/status
+  reset_service: /rover_arm_sim/reset_driver
+  joint_states_topic: /joint_states
+  position_command_topic: /arm_position_controller/commands
+  effort_command_topic: /arm_effort_controller/commands
+  grasp_command_topic: /rover_arm_sim/grasp/command   # puente ROS <-> Gazebo (plugin GraspWeld)
+  grasp_state_topic: /rover_arm_sim/grasp/state
+
+# Un nodo ROS por driver real, con el mismo nombre que en el rover, para que los mensajes de log
+# salgan igual ("[WARN] [arm_drive_ctre]: J1 angle ...").
+driver_nodes:
+  arm_drive_ctre:                  # bus_can_drive2/launch/drive_can2-launch.py:23
+    kind: talon_group
+    can_id_arm1: 7                 # bus_can_drive2/config/drive_can_tank_params.yaml:7
+    can_id_arm5: 15                # bus_can_drive2/config/drive_can_tank_params.yaml:8
+    can_id_gripper: 14             # bus_can_drive2/config/drive_can_tank_params.yaml:9
+    can_id_lineal: 11              # bus_can_drive2/config/drive_can_tank_params.yaml:10
+    feedback_rate_hz: 20.0         # bus_can_drive2/src/drive_can_tank.cpp:321-323 (50 ms)
+    # Cada mensaje en estos topics renueva la habilitación de TODOS los Talon por 10 s
+    # (FeedEnable(10000): drive_can_tank.cpp:375,389,400,409); /cmd_vel la renueva por 5 s (:355).
+    enable_timeout_s: 10.0         # bus_can_drive2/src/drive_can_tank.cpp:375
+    enable_topics: [/arm_teleop/joint1, /arm_teleop/joint4, /arm_teleop/gripper, /arm_teleop/elevador]
+    cmd_vel_topic: /cmd_vel        # bus_can_drive2/src/drive_can_tank.cpp:276
+    cmd_vel_enable_timeout_s: 5.0  # bus_can_drive2/src/drive_can_tank.cpp:355
+    neutral_behavior: hold         # DEFAULT al deshabilitarse (brake/coast no se mide, reporte §6.3)
+  dual_epos_node:                  # epos_control/launch/epos_control_launch.py:7
+    kind: epos_group
+    can_channel: can0              # epos_control/launch/epos_control_launch.py:13
+    feedback_rate_hz: 20.0         # epos_control/epos_control/joint_control.py:135
+    fault_check_rate_hz: 1.0       # epos_control/epos_control/joint_control.py:137
+  arm_j5_servo:                    # DEFAULT: el controlador real de J5 no está en el repo (reporte N1)
+    kind: plain
+  arm_gripper_controller:          # DEFAULT: controlador externo, probablemente ESP32 (reporte N2)
+    kind: plain
+
+# -----------------------------------------------------------------------------------------------------
+# Joints. driver_model elige el modelo de driver de cada joint (reporte §E.13):
+#   talon_motion_magic | epos_ppm | servo | torque (el de epos4_drive, para cuando se migre)
+# Cambiar de modelo = cambiar driver_model y llenar su bloque. No hay que tocar código.
+# Bloque `physical` (reporte §3.1, capa física): grados físicos = scale · grados del driver + offset_deg.
+# Bloque `gazebo`: ángulo URDF = urdf_sign · grados físicos + urdf_offset_deg (reporte §4.1). Los
+# límites del joint en Gazebo salen de los límites del driver (K6), no del CAD.
+# -----------------------------------------------------------------------------------------------------
+joints:
+  joint1:                                   # base (yaw)
+    driver_node: arm_drive_ctre
+    driver_model: talon_motion_magic        # hoy: drive_can_tank (reporte §E.13)
+    command_topic: /arm_teleop/joint1       # bus_can_drive2/src/drive_can_tank.cpp:280
+    sync_velocity_topic: /arm_sync/joint1_velocity   # bus_can_drive2/src/drive_can_tank.cpp:288
+    feedback_deg_topic: /arm_feedback/joint1_deg     # bus_can_drive2/src/drive_can_tank.cpp:311
+    feedback_raw_topic: /arm_feedback/joint1_ticks   # bus_can_drive2/src/drive_can_tank.cpp:316
+    log_name: J1                            # bus_can_drive2/src/drive_can_tank.cpp:371
+    talon_motion_magic:
+      deg_min: -85.0                        # bus_can_drive2/config/drive_can_tank_params.yaml:21
+      deg_max: 90.0                         # bus_can_drive2/config/drive_can_tank_params.yaml:22
+      ticks_min: 1862.0                     # bus_can_drive2/config/drive_can_tank_params.yaml:23
+      ticks_max: -186.0                     # bus_can_drive2/config/drive_can_tank_params.yaml:24
+      invert: false                         # bus_can_drive2/src/drive_can_tank.cpp:94,377 (sin signo)
+      phys_error: 0.0                       # bus_can_drive2/src/drive_can_tank.cpp:86
+      add_phys_error: true                  # bus_can_drive2/src/drive_can_tank.cpp:369
+      cruise_velocity: 25                   # ticks/100 ms, bus_can_drive2/src/drive_can_tank.cpp:122
+      acceleration: 35                      # ticks/100 ms/s, bus_can_drive2/src/drive_can_tank.cpp:123
+      sync_velocity_min: 1.0                # bus_can_drive2/src/drive_can_tank.cpp:334
+      sync_velocity_max: 9.0                # bus_can_drive2/src/drive_can_tank.cpp:334
+      stall_warning_deg: 2.0                # DEFAULT aviso "atascado" de la ventana (C21); el real no avisa
+      stall_warning_time_s: 1.0             # DEFAULT (reporte §6.6, "Aviso de atasco > 1 s")
+    physical:
+      scale: 1.0                            # DEFAULT (calibración perfecta, reporte §6.3)
+      offset_deg: 0.0                       # DEFAULT
+    gazebo:
+      urdf_joint: Joint_1
+      urdf_sign: -1.0                       # θ1 = −q1 (reporte §4.1)
+      urdf_offset_deg: 0.0                  # reporte §4.1
+      limit_margin_deg: 0.0                 # DEFAULT: el Talon no tiene límite propio (ConfigFactoryDefault)
+      effort: 150.0                         # DEFAULT N·m, par máximo del joint en Gazebo
+      velocity: 3.0                         # DEFAULT rad/s, tope de Gazebo (los perfiles mandan)
+
+  joint2:                                   # hombro (pitch)
+    driver_node: dual_epos_node
+    driver_model: epos_ppm                  # hoy: dual_epos_node (reporte §E.13)
+    command_topic: /arm_teleop/joint2       # epos_control/launch/epos_control_launch.py:26
+    sync_velocity_topic: /arm_sync/joint2_velocity   # epos_control/epos_control/joint_control.py:122
+    feedback_deg_topic: /arm_feedback/joint2_deg     # epos_control/epos_control/joint_control.py:129
+    feedback_raw_topic: /arm_feedback/joint2_counts  # epos_control/epos_control/joint_control.py:131
+    log_name: Joint2                        # epos_control/epos_control/joint_control.py:102
+    epos_ppm:
+      node_id: 5                            # epos_control/launch/epos_control_launch.py:17
+      angle_min: -5.0                       # epos_control/launch/epos_control_launch.py:18
+      angle_max: 170.0                      # epos_control/launch/epos_control_launch.py:19
+      counts_min: -28800.0                  # epos_control/launch/epos_control_launch.py:20
+      counts_max: 979200.0                  # epos_control/launch/epos_control_launch.py:21
+      profile_velocity: 350                 # epos_control/launch/epos_control_launch.py:22
+      profile_acceleration: 1000            # epos_control/launch/epos_control_launch.py:23
+      profile_deceleration: 1000            # epos_control/launch/epos_control_launch.py:24
+      # EXCEPCIÓN DELIBERADA: el código dice 0.0 (epos_control/launch/epos_control_launch.py:25), pero
+      # el brazo real arranca en 170° (P2). Ver hallazgo 13 de GUIA_PENDIENTES.md y reporte §E.12.
+      initial_angle: 170.0
+      max_velocity_factor: 2                # epos_control/epos_control/joint_control.py:185
+      max_acceleration_factor: 2            # epos_control/epos_control/joint_control.py:186
+      drive_limit_margin_counts: 1000       # epos_control/epos_control/joint_control.py:187-188
+      sync_velocity_min: 1                  # epos_control/epos_control/joint_control.py:214
+      # Velocidad física con los valores de perfil de arriba (la unidad del perfil no se sabe, §3.2)
+      speed_deg_s: 16.6                     # PENDIENTE P3
+      accel_deg_s2: 47.4                    # DEFAULT (reporte §6.5)
+      setpoint_mode: immediate              # PENDIENTE P3 (immediate = continuo | buffered = a tirones)
+      command_latency_ms: 20.0              # DEFAULT (reporte §6.5)
+      following_error_window_counts: 2000   # DEFAULT de fábrica, epos_control/eds_files/flat90.eds:5004-5009
+      sim_tracking_window_s: 0.08           # DEFAULT compensa el retraso propio de Gazebo (no existe en el real)
+      fault_code: 0x8611                    # epos_control/epos_lib/epos_controller.py:50
+      fault_error_register_bits: [0, 7]     # DEFAULT supuesto: genérico + "Motion error" (epos_controller.py:61-69)
+      fault_behavior: hold                  # DEFAULT (reporte §6.5: "se sostiene")
+    physical:
+      scale: 1.0                            # DEFAULT
+      offset_deg: 0.0                       # DEFAULT
+    gazebo:
+      urdf_joint: Joint_2
+      urdf_sign: -1.0                       # θ2 = 90° − q2 (reporte §4.1)
+      urdf_offset_deg: 90.0                 # reporte §4.1
+      limit_margin_deg: 0.0                 # el margen lo da drive_limit_margin_counts
+      effort: 300.0                         # DEFAULT N·m (alcanza para 5 kg con el brazo estirado)
+      velocity: 3.0                         # DEFAULT rad/s
+
+  joint3:                                   # codo (pitch)
+    driver_node: dual_epos_node
+    driver_model: epos_ppm
+    command_topic: /arm_teleop/joint3       # epos_control/launch/epos_control_launch.py:39
+    sync_velocity_topic: /arm_sync/joint3_velocity   # epos_control/epos_control/joint_control.py:123
+    feedback_deg_topic: /arm_feedback/joint3_deg     # epos_control/epos_control/joint_control.py:130
+    feedback_raw_topic: /arm_feedback/joint3_counts  # epos_control/epos_control/joint_control.py:132
+    log_name: Joint3                        # epos_control/epos_control/joint_control.py:103
+    epos_ppm:
+      node_id: 4                            # epos_control/launch/epos_control_launch.py:30
+      angle_min: -160.0                     # epos_control/launch/epos_control_launch.py:31
+      angle_max: 170.0                      # epos_control/launch/epos_control_launch.py:32
+      counts_min: -728178.0                 # epos_control/launch/epos_control_launch.py:33
+      counts_max: 773689.0                  # epos_control/launch/epos_control_launch.py:34
+      profile_velocity: 500                 # epos_control/launch/epos_control_launch.py:35
+      profile_acceleration: 1000            # epos_control/launch/epos_control_launch.py:36
+      profile_deceleration: 1000            # epos_control/launch/epos_control_launch.py:37
+      initial_angle: -146.0                 # epos_control/launch/epos_control_launch.py:38
+      max_velocity_factor: 2                # epos_control/epos_control/joint_control.py:185
+      max_acceleration_factor: 2            # epos_control/epos_control/joint_control.py:186
+      drive_limit_margin_counts: 1000       # epos_control/epos_control/joint_control.py:187-188
+      sync_velocity_min: 1                  # epos_control/epos_control/joint_control.py:217
+      speed_deg_s: 30.0                     # PENDIENTE P3
+      accel_deg_s2: 60.0                    # DEFAULT (reporte §6.5)
+      setpoint_mode: immediate              # PENDIENTE P3
+      command_latency_ms: 20.0              # DEFAULT (reporte §6.5)
+      following_error_window_counts: 2000   # DEFAULT de fábrica, epos_control/eds_files/joint3.eds:5004-5009
+      sim_tracking_window_s: 0.08           # DEFAULT
+      fault_code: 0x8611                    # epos_control/epos_lib/epos_controller.py:50
+      fault_error_register_bits: [0, 7]     # DEFAULT supuesto
+      fault_behavior: hold                  # DEFAULT
+    physical:
+      scale: 1.0                            # DEFAULT
+      offset_deg: 0.0                       # DEFAULT
+    gazebo:
+      urdf_joint: Joint_3
+      urdf_sign: -1.0                       # θ3 = −2.133° − q3 (reporte §4.1)
+      urdf_offset_deg: -2.133               # reporte §4.1 (J3→J4 desfasado 0.016 m, brazo.urdf:113)
+      limit_margin_deg: 0.0
+      effort: 200.0                         # DEFAULT N·m
+      velocity: 3.0                         # DEFAULT rad/s
+
+  joint4:                                   # muñeca (pitch)
+    driver_node: arm_drive_ctre
+    driver_model: talon_motion_magic
+    command_topic: /arm_teleop/joint4       # bus_can_drive2/src/drive_can_tank.cpp:284
+    sync_velocity_topic: /arm_sync/joint4_velocity   # bus_can_drive2/src/drive_can_tank.cpp:292
+    feedback_deg_topic: /arm_feedback/joint4_deg     # bus_can_drive2/src/drive_can_tank.cpp:313
+    feedback_raw_topic: /arm_feedback/joint4_ticks   # bus_can_drive2/src/drive_can_tank.cpp:318
+    log_name: J4                            # bus_can_drive2/src/drive_can_tank.cpp:385
+    talon_motion_magic:
+      deg_min: -150.0                       # bus_can_drive2/config/drive_can_tank_params.yaml:31
+      deg_max: 150.0                        # bus_can_drive2/config/drive_can_tank_params.yaml:32
+      ticks_min: -2206.0                    # bus_can_drive2/config/drive_can_tank_params.yaml:33
+      ticks_max: -5617.0                    # bus_can_drive2/config/drive_can_tank_params.yaml:34
+      invert: true                          # bus_can_drive2/src/drive_can_tank.cpp:99,391 (my_map(-ángulo))
+      phys_error: 0.0                       # bus_can_drive2/src/drive_can_tank.cpp:86
+      add_phys_error: false                 # bus_can_drive2/src/drive_can_tank.cpp:383 (J4 no lo suma)
+      cruise_velocity: 30                   # bus_can_drive2/src/drive_can_tank.cpp:140
+      acceleration: 40                      # bus_can_drive2/src/drive_can_tank.cpp:141
+      sync_velocity_min: 3.0                # bus_can_drive2/src/drive_can_tank.cpp:340
+      sync_velocity_max: 30.0               # bus_can_drive2/src/drive_can_tank.cpp:340
+      stall_warning_deg: 2.0                # DEFAULT
+      stall_warning_time_s: 1.0             # DEFAULT
+    physical:
+      scale: 1.0                            # DEFAULT
+      offset_deg: 0.0                       # DEFAULT
+    gazebo:
+      urdf_joint: Joint_4
+      urdf_sign: -1.0                       # θ4 = 2.133° − q4 (reporte §4.1)
+      urdf_offset_deg: 2.133                # reporte §4.1
+      limit_margin_deg: 0.0
+      effort: 60.0                          # DEFAULT N·m
+      velocity: 3.0                         # DEFAULT rad/s
+
+  joint5:                                   # muñeca (roll), servo
+    driver_node: arm_j5_servo
+    driver_model: servo
+    command_topic: /arm_teleop/joint5       # arm_controller/arm_controller/arm_manager.py:216
+    log_name: J5
+    servo:
+      deg_min: -90.0                        # reporte D5 (GUIA_PENDIENTES.md:153)
+      deg_max: 90.0                         # reporte D5
+      speed_deg_s: 60.0                     # DEFAULT velocidad típica de servo (reporte D5)
+      warn_on_clamp: false                  # DEFAULT: no se sabe si el controlador real avisa
+    physical:
+      scale: 1.0                            # DEFAULT
+      offset_deg: 0.0                       # DEFAULT
+    gazebo:
+      urdf_joint: Joint_5
+      urdf_sign: 1.0                        # DEFAULT (s5 desconocido, reporte §4.1)
+      urdf_offset_deg: 0.0
+      limit_margin_deg: 0.0
+      effort: 30.0                          # DEFAULT N·m
+      velocity: 3.0                         # DEFAULT rad/s
+
+# Bloque del modelo `torque` (contrato de epos4_drive). Hoy no lo usa ningún joint. Para probarlo en J2:
+# driver_model: torque en joints.joint2 y un bloque `torque:` como este dentro de joints.joint2.
+torque_model_template:
+  command_topic: /arm_teleop/joint2/torque_nm   # DEFAULT (epos4_drive usa joint3: K11, reporte §E.13)
+  feedback_deg_topic: /arm_feedback/joint2_deg
+  feedback_raw_topic: /arm_feedback/joint2_ticks
+  loop_hz: 200.0                    # epos4_drive/config/epos4_params.yaml:10
+  encoder_cpr: 500                  # epos4_drive/config/epos4_params.yaml:13
+  gear_ratio: 1.0                   # epos4_drive/config/epos4_params.yaml:14 (sin calibrar, reporte §E.13)
+  initial_angle: 170.0              # P2 (epos4_drive usa 180, epos4_params.yaml:15)
+  sign: 1.0                         # epos4_drive/config/epos4_params.yaml:16
+  max_speed_rpm: 3000.0             # epos4_drive/config/epos4_params.yaml:19
+  max_torque_nm: 0.20               # epos4_drive/config/epos4_params.yaml:20
+  watchdog_timeout_ms: 500.0        # epos4_drive/config/epos4_params.yaml:21
+  joint_gear_ratio: 100.0           # DEFAULT par en el joint = par de motor · joint_gear_ratio
+  limits_deg: [-5.0, 170.0]         # DEFAULT límites del joint en Gazebo (epos4_drive no tiene límites)
+
+# -----------------------------------------------------------------------------------------------------
+# Gripper: motor DC de 12 V en lazo abierto con controlador externo (reporte N2, D6)
+# -----------------------------------------------------------------------------------------------------
+gripper:
+  driver_node: arm_gripper_controller
+  driver_model: dc_open_loop
+  command_topic: /arm_teleop/gripper        # simple_drive2/simple_drive2/drive_arm_teleop.py:32
+  open_sign: 1.0                            # PENDIENTE P4 (+1 = abrir, comentario de drive_arm_teleop.py:133)
+  stroke_m: 0.17                            # dato del equipo (reporte N2): apertura de 0 a 17 cm
+  full_stroke_time_s: 4.0                   # PENDIENTE P4
+  hold_requires_button: true                # DEFAULT: sostiene mientras se mantiene el botón (instrucción v1)
+  contact_min_time_s: 0.05                  # DEFAULT contacto de los dos dedos antes de sujetar
+  squeeze_margin_m: 0.003                   # DEFAULT cuánto "empuja" el dedo detenido contra el objeto
+  stall_tolerance_m: 0.002                  # DEFAULT dedo detenido = se quedó atrás más que esto
+  end_stop_warning_time_s: 1.0              # DEFAULT aviso de "gripper en tope" (reporte §6.6)
+  fingers:                                  # marco de Link_5; la malla del CAD tiene 15.2 cm de apertura
+    cad_opening_m: 0.152                    # medido en Link_5.STL por tools/fit_collision.py
+    finger_a: {joint: finger_a_joint, link: finger_a, axis: [0.0, -1.0, 0.0], mesh: finger_a.stl}
+    finger_b: {joint: finger_b_joint, link: finger_b, axis: [0.0, 1.0, 0.0], mesh: finger_b.stl}
+    mass_kg: 0.04                           # DEFAULT
+    effort_n: 80.0                          # DEFAULT fuerza máxima de cada dedo en Gazebo
+    velocity_m_s: 0.2                       # DEFAULT tope de Gazebo
+    mu: 1.5                                 # DEFAULT fricción de las mordazas (dedos flexibles, S13)
+
+# -----------------------------------------------------------------------------------------------------
+# Modelo de Gazebo (se genera al lanzar a partir del CAD de mi_rover_description, sin modificarlo)
+# -----------------------------------------------------------------------------------------------------
+model:
+  name: rover_arm
+  description_package: mi_rover_description
+  rover_xacro: urdf/rover_completo.urdf.xacro   # de aquí salen montaje (:18) y llantas (:8-11)
+  arm_urdf: urdf/brazo.urdf
+  chassis_urdf: urdf/chasis.urdf
+  gripper_body_mesh: gripper_body.stl           # Link_5.STL sin los dedos (tools/fit_collision.py)
+  fix_to_world: true                # DEFAULT: el rover no se maneja en la sim (reporte §E.4)
+  rover_xyz: [0.0, 0.0, 0.0]        # DEFAULT piso a la altura del origen del chasis (reporte S8)
+  self_collide: true                # reporte D10 (2026-10-28b): brazo contra chasis, piso y objetos
+  # gz_ros2_control 0.7.21 sigue la posición mandando velocidad = 0.1 · (tasa del controller_manager)
+  # · error. La ganancia 0.1 está fija en esta versión (no la toma del YAML). Con 100 Hz (el valor de
+  # mi_rover_description/config/controllers.yaml:3) Gazebo se atrasa ~100 ms y el EPOS emulado marca
+  # falla sin choque; a 1000 Hz se atrasa ~10 ms. Ver documentacion_sim.md, "Modelo de Gazebo".
+  controller_update_rate_hz: 1000   # DEFAULT
+  joint_state_rate_hz: 100          # DEFAULT frecuencia de /joint_states (no hace falta 1 kHz)
+  physics_step_s: 0.001             # reporte §6.7
+  real_time_factor: 1.0
+  collision_detector: ode           # DEFAULT detector de choques de DART
+  link_mu: 0.8                      # DEFAULT fricción de los eslabones
+
+# Colisiones simplificadas (cajas en el marco de cada link). Generadas por tools/fit_collision.py a
+# partir de las mallas del CAD.  # DEFAULT
+collision:
+  links:
+    base:
+      - {xyz: [-0.0775, 0.0003, 0.0016], size: [0.0099, 0.2592, 0.0032]}
+      - {xyz: [-0.0026, 0.0000, 0.0166], size: [0.1399, 0.2600, 0.0332]}
+      - {xyz: [0.0750, 0.0000, 0.0016], size: [0.0149, 0.2600, 0.0032]}
+    Link_1:
+      - {xyz: [0.0000, -0.0111, 0.0030], size: [0.0850, 0.1073, 0.0400]}
+      - {xyz: [0.0120, -0.0400, 0.0280], size: [0.0920, 0.1648, 0.0100]}
+      - {xyz: [0.0056, -0.0422, 0.0630], size: [0.1167, 0.1604, 0.0600]}
+      - {xyz: [-0.0004, -0.0569, 0.0980], size: [0.0948, 0.1309, 0.0100]}
+      - {xyz: [0.0063, -0.0812, 0.1111], size: [0.0689, 0.0824, 0.0162]}
+    Link_2:
+      - {xyz: [0.0000, -0.4855, -0.0431], size: [0.0513, 0.0100, 0.0382]}
+      - {xyz: [0.0046, -0.4505, -0.0268], size: [0.0891, 0.0600, 0.0957]}
+      - {xyz: [-0.0000, -0.3805, -0.0381], size: [0.0532, 0.0800, 0.0482]}
+      - {xyz: [0.0000, -0.2255, -0.0365], size: [0.0333, 0.2300, 0.0331]}
+      - {xyz: [0.0000, -0.0347, -0.0365], size: [0.0823, 0.1516, 0.0730]}
+    Link_3:
+      - {xyz: [0.0000, 0.0350, -0.0257], size: [0.0799, 0.1500, 0.0514]}
+      - {xyz: [0.0000, 0.1839, -0.0257], size: [0.0333, 0.1477, 0.0331]}
+      - {xyz: [0.0200, 0.3407, -0.0257], size: [0.0850, 0.1585, 0.0514]}
+      - {xyz: [0.0200, 0.4299, -0.0257], size: [0.0850, 0.0196, 0.1028]}
+      - {xyz: [0.0200, 0.4596, -0.0257], size: [0.0850, 0.0387, 0.0514]}
+    Link_4:
+      - {xyz: [0.0000, -0.2480, -0.0057], size: [0.0813, 0.0070, 0.0816]}
+      - {xyz: [0.0000, -0.2366, -0.0231], size: [0.0813, 0.0098, 0.1164]}
+      - {xyz: [0.0000, -0.2115, -0.0297], size: [0.0552, 0.0400, 0.1032]}
+      - {xyz: [0.0000, -0.1623, -0.0105], size: [0.0450, 0.0584, 0.0546]}
+      - {xyz: [0.0000, -0.0540, -0.0057], size: [0.0450, 0.1530, 0.0400]}
+    Link_5:
+      - {xyz: [0.0000, -0.0221, 0.0150], size: [0.0350, 0.3158, 0.0220]}
+  fingers:
+    finger_a: {xyz: [0.0000, -0.1358, 0.0852], size: [0.0320, 0.0285, 0.1183]}
+    finger_b: {xyz: [0.0000, 0.0450, 0.0852], size: [0.0350, 0.0300, 0.1184]}
+  chassis:
+    - {name: deck, xyz: [0.0012, 0.0002, 0.4130], size: [0.6000, 0.4995, 0.1260]}
+    - {name: rail_left, xyz: [0.0244, 0.2943, 0.4130], size: [0.6460, 0.0884, 0.1260]}
+    - {name: rail_right, xyz: [0.0244, -0.2955, 0.4140], size: [0.6460, 0.0840, 0.0486]}
+    - {name: rear_bar, xyz: [-0.3284, 0.0000, 0.4289], size: [0.0508, 0.2994, 0.0798]}
+    - {name: rear_left, xyz: [-0.3488, 0.2655, 0.3035], size: [0.0924, 0.2309, 0.3790]}
+    - {name: rear_right, xyz: [-0.3488, -0.2651, 0.3035], size: [0.0924, 0.2298, 0.3790]}
+    - {name: front_left, xyz: [0.3910, 0.2753, 0.2783], size: [0.0792, 0.2113, 0.3287]}
+    - {name: front_right, xyz: [0.3910, -0.2743, 0.2783], size: [0.0792, 0.2113, 0.3287]}
+  wheel: {radius: 0.1450, length: 0.1500}
+
+# -----------------------------------------------------------------------------------------------------
+# Mundo de práctica (se genera al lanzar)
+# -----------------------------------------------------------------------------------------------------
+world:
+  name: practica_brazo
+  ground_mu: 1.0                    # DEFAULT
+  camera_pose: [1.7, -1.2, 1.0, 0.0, 0.46, 2.31]  # DEFAULT vista inicial: de frente-derecha, mirando la zona de los objetos
+  objects:                          # DEFAULT todos (instrucción v1: piso plano y unos 5 objetos)
+    # Las mordazas abren a lo ancho (eje y del brazo) y el centro del agarre queda 6.5 cm a la derecha
+    # del plano del brazo (CAD de Link_5). Posiciones revisadas con la IK real (documentacion_sim.md §5).
+    - name: caja_5kg
+      label: Caja de 5 kg
+      shape: box
+      size: [0.15, 0.12, 0.16]      # 12 cm a lo ancho: cabe en la apertura de 17 cm
+      mass: 5.0
+      xyz: [0.80, -0.06, 0.08]
+      yaw_deg: 0.0
+      color: [0.55, 0.38, 0.20, 1.0]
+      mu: 0.9
+    - name: contenedor_asa
+      label: Contenedor con asa (asa de 7.5 cm, 5 kg)
+      shape: compound
+      mass: 5.0
+      xyz: [0.82, 0.42, 0.0]
+      yaw_deg: 40.0                 # el asa queda de frente al brazo cuando la base gira hacia ella
+      color: [0.20, 0.45, 0.70, 1.0]
+      mu: 0.9
+      parts:                        # posiciones relativas al objeto (base en el piso); asa a lo largo de x
+        - {shape: box, size: [0.28, 0.16, 0.14], xyz: [0.0, 0.0, 0.07]}
+        - {shape: box, size: [0.03, 0.03, 0.07], xyz: [0.11, 0.0, 0.175]}
+        - {shape: box, size: [0.03, 0.03, 0.07], xyz: [-0.11, 0.0, 0.175]}
+        - {shape: cylinder, radius: 0.0375, length: 0.25, xyz: [0.0, 0.0, 0.2475], rpy: [0.0, 1.5708, 0.0]}
+    - name: piedra
+      label: Piedra irregular
+      shape: mesh
+      mesh: piedra.stl
+      bbox: [0.098, 0.088, 0.068]   # extensión de meshes/piedra.stl (tools/make_rock.py)
+      mass: 0.8
+      xyz: [0.78, -0.32, 0.0]
+      yaw_deg: 25.0
+      color: [0.45, 0.42, 0.38, 1.0]
+      mu: 1.0
+    - name: botella
+      label: Botella
+      shape: cylinder
+      radius: 0.035
+      length: 0.20
+      mass: 0.6
+      xyz: [1.00, 0.15, 0.10]
+      yaw_deg: 0.0
+      color: [0.15, 0.65, 0.30, 1.0]
+      mu: 0.8
+    - name: cubo_chico
+      label: Cubo chico (5 cm)
+      shape: box
+      size: [0.05, 0.05, 0.05]
+      mass: 0.15
+      xyz: [0.70, 0.12, 0.025]
+      yaw_deg: 30.0
+      color: [0.85, 0.15, 0.15, 1.0]
+      mu: 0.9
+
+# -----------------------------------------------------------------------------------------------------
+# Joystick: ventana "Attack 3 virtual" y respaldo /joy
+# -----------------------------------------------------------------------------------------------------
+joystick:
+  mode: auto                        # auto | uinput | topic (reporte D3: uinput; /joy directo de respaldo)
+  device_name: Logitech Logitech Attack 3   # DEFAULT nombre con que Linux reporta el Attack 3 (inferencia)
+  vendor_id: 0x046d                 # DEFAULT Logitech
+  product_id: 0xc214                # DEFAULT Attack 3
+  axis_codes: [ABS_X, ABS_Y, ABS_THROTTLE]  # PENDIENTE P1 (3 ejes: X, Y, rueda; reporte §2.1)
+  axis_raw_min: 0                   # DEFAULT resolución de 8 bits (inferencia)
+  axis_raw_max: 255                 # DEFAULT
+  # Índice = número impreso − 1 (orden evdev/SDL, reporte §2.2)  # PENDIENTE P1
+  button_codes: [BTN_TRIGGER, BTN_THUMB, BTN_THUMB2, BTN_TOP, BTN_TOP2, BTN_PINKIE, BTN_BASE, BTN_BASE2, BTN_BASE3, BTN_BASE4, BTN_BASE5]
+  # Respaldo /joy: copia la semántica de joy_node con los parámetros del launch real.
+  joy_topic: /joy
+  joy_frame_id: joy
+  joy_deadzone: 0.1                 # simple_drive2/launch/drive_arm_teleop_launch.py:24
+  joy_autorepeat_rate: 20.0         # simple_drive2/launch/drive_arm_teleop_launch.py:25
+  release_wait_s: 0.3               # DEFAULT al cerrar: tiempo con todo suelto antes de destruir el dispositivo
+  keyboard_half_deflection: 0.5     # DEFAULT palanca a 50 % con Shift
+  throttle_key_step: 0.1            # DEFAULT paso de la rueda con R / F
+  status_nodes: [arm_drive_ctre, dual_epos_node, arm_manager, arm_j5_servo, arm_gripper_controller]
+  status_min_level: 30              # WARN (rcl_interfaces/msg/Log)
+  stick_keys: {forward: [W, Up], back: [S, Down], left: [A, Left], right: [D, Right]}
+  throttle_keys: {up: R, down: F}
+  # Posición física de cada botón en el Attack 3 (docs/joystick_arm/joystick_foto2.jpeg y foto3.jpeg):
+  # head_* = cabeza de la palanca; base_* = base. La función sale de drive_arm_teleop.py (reporte §2.2).
+  buttons:
+    - {number: 1, place: trigger, key: Space, label: "Gatillo: mantener = la palanca sube/baja (Z)"}
+    - {number: 2, place: head_bottom, key: "2", label: Modo cartesiano}
+    - {number: 3, place: head_top, key: "3", label: Modo relativo}
+    - {number: 4, place: head_left, key: "4", label: Gripper abre}
+    - {number: 5, place: head_right, key: "5", label: Gripper cierra}
+    - {number: 6, place: base_left_back, key: "6", label: Gira muñeca +}
+    - {number: 7, place: base_left_front, key: "7", label: Gira muñeca −}
+    - {number: 8, place: base_front_left, key: "8", label: (sin uso)}
+    - {number: 9, place: base_front_right, key: "9", label: (sin uso)}
+    - {number: 10, place: base_right_front, key: "0", label: Inclina muñeca abajo}
+    - {number: 11, place: base_right_back, key: "-", label: Inclina muñeca arriba}
+  axes_labels:
+    stick_y: "Palanca adelante/atrás: la punta avanza/retrocede (con gatillo: sube/baja)"
+    stick_x: "Palanca izquierda/derecha: la punta va a los lados"
+    throttle: "Rueda: servo de cámara (nadie lo escucha)"

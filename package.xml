@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rover_arm_sim</name>
+  <version>1.0.0</version>
+  <description>Simulación del brazo del rover en Gazebo Fortress para entrenar operadores de teleoperación
+    (v1): emulador de drivers, modelo de Gazebo, gripper con agarre, joystick virtual Attack 3 y launch único.</description>
+  <maintainer email="hectorcg270905@gmail.com">hector</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <build_depend>libignition-gazebo6-dev</build_depend>
+  <build_depend>libignition-plugin-dev</build_depend>
+  <build_depend>libignition-transport11-dev</build_depend>
+  <build_depend>libignition-msgs8-dev</build_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>position_controllers</exec_depend>
+  <exec_depend>effort_controllers</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-evdev</exec_depend>
+  <exec_depend>python3-pyqt5</exec_depend>
+  <!-- Paquetes reales que se lanzan sin cambios y CAD que se reutiliza (no se modifican) -->
+  <exec_depend>arm_controller</exec_depend>
+  <exec_depend>simple_drive2</exec_depend>
+  <exec_depend>mi_rover_description</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

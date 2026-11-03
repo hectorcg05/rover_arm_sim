@@ -1,0 +1,4 @@
+# rover_arm_sim: permite que el usuario con sesión abierta use /dev/uinput, para que la ventana
+# "Attack 3 virtual" cree un joystick USB virtual que el joy_node real lee igual que al físico.
+# Instalación (una sola vez): ver docs/sim_implementation/guia_operadores_sim.md, "Instalar".
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

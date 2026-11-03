@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+import sys
+
+from rover_arm_sim.model_builder import main
+
+sys.exit(main())

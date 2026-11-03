@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+import sys
+
+from rover_arm_sim.wait_for_feedback import main
+
+sys.exit(main())
